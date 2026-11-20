@@ -8,6 +8,24 @@ struct TimedAlert: Identifiable {
     let alert: MonitorAlert
 }
 
+struct ApplicationActionRequest: Identifiable {
+    enum Kind {
+        case quit
+        case forceQuit
+    }
+
+    let id = UUID()
+    let process: ProcessUsage
+    let applicationName: String
+    let kind: Kind
+}
+
+struct ActionFeedback: Identifiable {
+    let id = UUID()
+    let message: String
+    let isError: Bool
+}
+
 private final class SamplingWorker: @unchecked Sendable {
     private let probe = SystemProbe()
     private let detector = AnomalyDetector(cpuThreshold: 80, requiredConsecutiveSamples: 3)
@@ -65,6 +83,8 @@ final class MonitorViewModel: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var isSampling = false
     @Published var interval: TimeInterval = 5
+    @Published var pendingAction: ApplicationActionRequest?
+    @Published private(set) var feedback: ActionFeedback?
 
     private let worker = SamplingWorker()
     private let samplingQueue = DispatchQueue(label: "com.richardbathiebo.macthermalwatch.sampling", qos: .utility)
@@ -155,6 +175,66 @@ final class MonitorViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    func openActivityMonitor() {
+        let url = URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    }
+
+    func canQuit(_ process: ProcessUsage) -> Bool {
+        managedApplication(for: process) != nil
+    }
+
+    func requestQuit(_ process: ProcessUsage, force: Bool = false) {
+        guard let application = managedApplication(for: process) else {
+            showFeedback("Ce processus système ne peut pas être fermé depuis MacThermalWatch.", isError: true)
+            return
+        }
+        pendingAction = ApplicationActionRequest(
+            process: process,
+            applicationName: application.localizedName ?? friendlyProcessName(process),
+            kind: force ? .forceQuit : .quit
+        )
+    }
+
+    func confirm(_ request: ApplicationActionRequest) {
+        guard let application = managedApplication(for: request.process) else {
+            showFeedback("L’application n’est plus active ou ne peut pas être gérée.", isError: true)
+            return
+        }
+
+        let accepted: Bool
+        switch request.kind {
+        case .quit:
+            accepted = application.terminate()
+        case .forceQuit:
+            accepted = application.forceTerminate()
+        }
+
+        if accepted {
+            let wording = request.kind == .forceQuit ? "Fermeture forcée envoyée" : "Demande de fermeture envoyée"
+            showFeedback("\(wording) à \(request.applicationName).", isError: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.refresh()
+            }
+        } else {
+            showFeedback("macOS n’a pas accepté la demande pour \(request.applicationName).", isError: true)
+        }
+    }
+
+    var manageableProcesses: [ProcessUsage] {
+        guard let processes = snapshot?.topProcesses else { return [] }
+        var seenBundles = Set<String>()
+        return processes.filter { process in
+            guard let application = managedApplication(for: process),
+                  let bundlePath = application.bundleURL?.standardizedFileURL.path,
+                  seenBundles.insert(bundlePath).inserted else {
+                return false
+            }
+            return true
+        }
+    }
+
     func friendlyProcessName(_ process: ProcessUsage) -> String {
         let command = process.command
         if command.contains("Google Chrome Helper") {
@@ -224,6 +304,49 @@ final class MonitorViewModel: ObservableObject {
             try handle.write(contentsOf: data)
         } catch {
             // La surveillance doit continuer même si le journal n'est pas inscriptible.
+        }
+    }
+
+    private func managedApplication(for process: ProcessUsage) -> NSRunningApplication? {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        guard process.pid != currentPID else { return nil }
+
+        if let direct = NSRunningApplication(processIdentifier: process.pid),
+           isAllowedToQuit(direct) {
+            return direct
+        }
+
+        guard let bundlePath = Parsers.applicationBundlePath(from: process.command) else {
+            return nil
+        }
+        let bundleURL = URL(fileURLWithPath: bundlePath).standardizedFileURL
+        return NSWorkspace.shared.runningApplications.first { application in
+            application.bundleURL?.standardizedFileURL == bundleURL && isAllowedToQuit(application)
+        }
+    }
+
+    private func isAllowedToQuit(_ application: NSRunningApplication) -> Bool {
+        guard !application.isTerminated,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              application.activationPolicy == .regular,
+              let path = application.bundleURL?.standardizedFileURL.path else {
+            return false
+        }
+
+        let userApplications = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications")
+            .standardizedFileURL.path + "/"
+        let isUserApplication = path.hasPrefix("/Applications/") || path.hasPrefix(userApplications)
+        let isThisApp = application.bundleIdentifier == "com.richardbathiebo.MacThermalWatch"
+        return isUserApplication && !isThisApp
+    }
+
+    private func showFeedback(_ message: String, isError: Bool) {
+        let value = ActionFeedback(message: message, isError: isError)
+        feedback = value
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard self?.feedback?.id == value.id else { return }
+            self?.feedback = nil
         }
     }
 

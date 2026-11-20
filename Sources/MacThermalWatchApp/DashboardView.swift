@@ -4,6 +4,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject private var monitor: MonitorViewModel
+    @State private var showsRecovery = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -65,6 +66,40 @@ struct DashboardView: View {
                     footer
                 }
                 .padding(24)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let feedback = monitor.feedback {
+                FeedbackBanner(feedback: feedback)
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: monitor.feedback?.id)
+        .sheet(isPresented: $showsRecovery) {
+            RecoveryView()
+                .environmentObject(monitor)
+        }
+        .alert(item: $monitor.pendingAction) { request in
+            switch request.kind {
+            case .quit:
+                return Alert(
+                    title: Text("Quitter \(request.applicationName) ?"),
+                    message: Text("L’application recevra une demande de fermeture normale et pourra proposer d’enregistrer son travail."),
+                    primaryButton: .destructive(Text("Quitter")) {
+                        monitor.confirm(request)
+                    },
+                    secondaryButton: .cancel()
+                )
+            case .forceQuit:
+                return Alert(
+                    title: Text("Forcer la fermeture ?"),
+                    message: Text("\(request.applicationName) sera arrêté immédiatement. Les modifications non enregistrées pourront être perdues."),
+                    primaryButton: .destructive(Text("Forcer à quitter")) {
+                        monitor.confirm(request)
+                    },
+                    secondaryButton: .cancel()
+                )
             }
         }
     }
@@ -151,6 +186,15 @@ struct DashboardView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+
+                Button {
+                    showsRecovery = true
+                } label: {
+                    Label("Réduire la charge", systemImage: "snowflake")
+                }
+                .buttonStyle(.bordered)
+                .padding(.top, 5)
+                .disabled(monitor.snapshot == nil)
             }
         }
         .padding(20)
@@ -215,7 +259,10 @@ struct DashboardView: View {
                         ProcessRow(
                             rank: index + 1,
                             name: monitor.friendlyProcessName(process),
-                            process: process
+                            process: process,
+                            canQuit: monitor.canQuit(process),
+                            onQuit: { monitor.requestQuit(process) },
+                            onForceQuit: { monitor.requestQuit(process, force: true) }
                         )
                         if index < min(processes.count, 8) - 1 { Divider() }
                     }
@@ -260,6 +307,7 @@ struct DashboardView: View {
                 .foregroundColor(.secondary)
             Spacer()
             Button("Afficher le journal") { monitor.revealLog() }
+            Button("Moniteur d’activité") { monitor.openActivityMonitor() }
             Button("Mesurer maintenant") { monitor.refresh() }
                 .disabled(monitor.isSampling)
         }
@@ -374,6 +422,9 @@ private struct ProcessRow: View {
     let rank: Int
     let name: String
     let process: ProcessUsage
+    let canQuit: Bool
+    let onQuit: () -> Void
+    let onForceQuit: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -396,9 +447,171 @@ private struct ProcessRow: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+
+            if canQuit {
+                Button("Quitter", action: onQuit)
+                    .buttonStyle(.bordered)
+
+                Menu {
+                    Button("Quitter proprement", action: onQuit)
+                    Divider()
+                    Button("Forcer à quitter", role: .destructive, action: onForceQuit)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 22)
+            }
         }
         .padding(.vertical, 8)
         .help(process.command)
+    }
+}
+
+private struct FeedbackBanner: View {
+    let feedback: ActionFeedback
+
+    var body: some View {
+        Label(
+            feedback.message,
+            systemImage: feedback.isError ? "xmark.octagon.fill" : "checkmark.circle.fill"
+        )
+        .font(.subheadline.weight(.semibold))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule().stroke(
+                feedback.isError ? Color.red.opacity(0.5) : Color.green.opacity(0.5),
+                lineWidth: 1
+            )
+        )
+        .shadow(radius: 8, y: 3)
+    }
+}
+
+private struct RecoveryView: View {
+    @EnvironmentObject private var monitor: MonitorViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var speed: Double {
+        Double(monitor.snapshot?.limits.speedPercent ?? 100)
+    }
+
+    private var recoveryColor: Color {
+        switch monitor.health {
+        case .danger: return .red
+        case .attention: return .orange
+        case .normal: return .green
+        case .waiting: return .secondary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Réduire la charge")
+                        .font(.title2.bold())
+                    Text("Assistant de récupération thermique")
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("Fermer") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            HStack(spacing: 14) {
+                Image(systemName: monitor.health.symbol)
+                    .font(.system(size: 30))
+                    .foregroundColor(recoveryColor)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(monitor.health.title)
+                        .font(.headline)
+                    ProgressView(value: speed, total: 100) {
+                        Text("Capacité CPU disponible")
+                    } currentValueLabel: {
+                        Text("\(Int(speed)) %").monospacedDigit()
+                    }
+                    .tint(recoveryColor)
+                }
+            }
+            .padding(16)
+            .background(recoveryColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Actions immédiates", systemImage: "checklist")
+                    .font(.headline)
+                StepRow(number: 1, text: "Arrêtez le partage d’écran, la caméra ou l’export en cours.")
+                StepRow(number: 2, text: "Posez le Mac sur une surface dure et libérez ses aérations.")
+                StepRow(number: 3, text: "Quittez une application lourde ci-dessous si elle n’est plus nécessaire.")
+            }
+
+            Divider()
+
+            Text("Applications que MacThermalWatch peut fermer proprement")
+                .font(.headline)
+
+            if monitor.manageableProcesses.isEmpty {
+                PlaceholderView(
+                    symbol: "shield.checkered",
+                    text: "Aucune application utilisateur fermable parmi les processus les plus actifs. Les services macOS sont protégés."
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(monitor.manageableProcesses.prefix(4).enumerated()), id: \.element.pid) { index, process in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(monitor.friendlyProcessName(process))
+                                    .font(.subheadline.weight(.semibold))
+                                Text(String(format: "%.1f %% CPU", process.cpuPercent))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Button("Quitter proprement") {
+                                dismiss()
+                                DispatchQueue.main.async {
+                                    monitor.requestQuit(process)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        .padding(.vertical, 9)
+                        if index < min(monitor.manageableProcesses.count, 4) - 1 { Divider() }
+                    }
+                }
+            }
+
+            Spacer()
+
+            HStack {
+                Button("Ouvrir le Moniteur d’activité") { monitor.openActivityMonitor() }
+                Spacer()
+                Text("Objectif : état normal et CPU ≥ 90 %")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(24)
+        .frame(width: 600, height: 620)
+    }
+}
+
+private struct StepRow: View {
+    let number: Int
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)")
+                .font(.caption.bold())
+                .foregroundColor(.white)
+                .frame(width: 20, height: 20)
+                .background(Color.accentColor, in: Circle())
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

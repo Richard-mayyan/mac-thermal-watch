@@ -55,6 +55,14 @@ public enum Parsers {
             }
     }
 
+    public static func applicationBundlePath(from command: String) -> String? {
+        guard command.hasPrefix("/"),
+              let appSuffix = command.range(of: ".app") else {
+            return nil
+        }
+        return String(command[..<appSuffix.upperBound])
+    }
+
     private static func firstInteger(in text: String) -> Int? {
         let digits = text.prefix { $0 == "-" || $0.isNumber }
         return Int(digits)

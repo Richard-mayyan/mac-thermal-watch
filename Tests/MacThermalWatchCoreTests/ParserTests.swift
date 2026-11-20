@@ -32,4 +32,14 @@ final class ParserTests: XCTestCase {
             "/Applications/Video Editor.app/Contents/MacOS/Video Editor"
         )
     }
+
+    func testFindsRootApplicationBundleInsideHelperPath() {
+        let command = "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"
+
+        XCTAssertEqual(
+            Parsers.applicationBundlePath(from: command),
+            "/Applications/Google Chrome.app"
+        )
+        XCTAssertNil(Parsers.applicationBundlePath(from: "/usr/libexec/secd"))
+    }
 }

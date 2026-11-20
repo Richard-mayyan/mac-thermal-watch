@@ -51,6 +51,10 @@ L'application :
 - affiche un statut global **normal**, **attention** ou **danger** ;
 - explique les mesures sans demander de connaissances techniques ;
 - montre la vitesse CPU, le planificateur, la charge et les processus actifs ;
+- permet de quitter proprement une application utilisateur trop lourde après
+  confirmation, avec une fermeture forcée séparée et explicitement signalée ;
+- propose un assistant « Réduire la charge » qui suit la récupération du CPU ;
+- protège les processus système, qui ne peuvent jamais être fermés depuis l'app ;
 - conserve les incidents dans le même journal JSONL que la CLI ;
 - ne désactive aucune protection et ne ferme aucun programme automatiquement.
 
