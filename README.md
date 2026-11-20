@@ -26,7 +26,35 @@ Les incidents sont écrits localement, par défaut dans :
 
 Aucune donnée n'est envoyée sur Internet et aucune application n'est fermée.
 
-## Lancer sur le MacBook Intel
+## Application graphique — recommandé
+
+L'interface native présente l'état de la machine en langage simple, l'évolution
+de la vitesse CPU, les applications les plus actives, les incidents récents et
+une recommandation adaptée à la situation.
+
+Après avoir cloné le dépôt, construire l'application cliquable :
+
+```bash
+cd mac-thermal-watch
+./scripts/build-app.sh
+open dist/MacThermalWatch.app
+```
+
+La compilation se fait directement sur le Mac : le bon binaire est donc produit
+automatiquement, que la machine utilise un processeur Intel ou Apple Silicon.
+Une fois construite, `MacThermalWatch.app` peut être déplacée dans le dossier
+`Applications` et ouverte sans repasser par le Terminal.
+
+L'application :
+
+- démarre automatiquement la surveillance à son ouverture ;
+- affiche un statut global **normal**, **attention** ou **danger** ;
+- explique les mesures sans demander de connaissances techniques ;
+- montre la vitesse CPU, le planificateur, la charge et les processus actifs ;
+- conserve les incidents dans le même journal JSONL que la CLI ;
+- ne désactive aucune protection et ne ferme aucun programme automatiquement.
+
+## Utiliser la version en ligne de commande
 
 Il faut macOS 12 ou plus récent et les outils de ligne de commande Apple. Après
 avoir cloné le dépôt :
